@@ -29,7 +29,7 @@ ParseMetaResult LitDatabase::ParseMeta(Table* table) {
         return PARSE_META_SUCCESS;
     } else if (strcmp(cur, ".btree") == 0) {
         std::cout << "Tree: " << std::endl;
-        PrintLeafNode(GetPage(table->pager, 0));
+        PrintTree(table->pager, 0, 0);
         return PARSE_META_SUCCESS;
     } else {
         cur = nullptr;
@@ -93,9 +93,6 @@ ExecuteResult LitDatabase::ExecuteInsert(Statement* statement, Table* table) {
     void* node = GetPage(table->pager, table->root_page_num);
 
     uint32_t num_cells = *LeafNodeNumCells(node);
-    if (num_cells >= LEAF_NODE_MAX_CELLS) {
-        return EXECUTE_TABLE_FULL;
-    }
 
     Row row = statement->row_to_insert;
     uint32_t key_to_insert = row.id;
@@ -160,6 +157,7 @@ Table* LitDatabase::DbOpen(const char* filename) {
     if (pager->num_pages == 0) {
         void* root_node = GetPage(pager, 0);
         InitializeLeafNode(root_node);
+        set_node_root(root_node, true);
     }
 
     return table;
@@ -328,9 +326,8 @@ void LitDatabase::LeafNodeInsert(Cursor* cursor, uint32_t key, const Row& value)
 
     uint32_t num_cells = *LeafNodeNumCells(node);
     if (num_cells >= LEAF_NODE_MAX_CELLS) {
-        // node full
-        std::cout << "Need to implement splitting a leaf node." << std::endl;
-        exit(EXIT_FAILURE);
+        LeafNodeSplitAndInsert(cursor, key, value);
+        return;
     }
 
     if (cursor->cell_num < num_cells) {
@@ -347,7 +344,14 @@ void LitDatabase::LeafNodeInsert(Cursor* cursor, uint32_t key, const Row& value)
 
 void LitDatabase::InitializeLeafNode(void* node) {
     set_node_type(node, NODE_LEAF);
+    set_node_root(node, false);
     *LeafNodeNumCells(node) = 0;
+}
+
+void LitDatabase::InitializeInternalNode(void* node) {
+    set_node_type(node, NODE_INTERNAL);
+    set_node_root(node, false);
+    *InternalNodeNumKeys(node) = 0;
 }
 
 void LitDatabase::PrintConstants() {
@@ -358,12 +362,46 @@ void LitDatabase::PrintConstants() {
     std::cout << "LEAF_NODE_MAX_CELLS: " << LEAF_NODE_MAX_CELLS << std::endl;
 }
 
-void LitDatabase::PrintLeafNode(void* node) {
-    uint32_t num_cells = *LeafNodeNumCells(node);
-    std::cout << "Leaf " << num_cells << std::endl;
-    for (uint32_t i = 0; i < num_cells; ++i) {
-        uint32_t key = *LeafNodeKey(node, i);
-        std::cout << "  - " << i << " : " << key << std::endl;
+// void LitDatabase::PrintLeafNode(void* node) {
+//     uint32_t num_cells = *LeafNodeNumCells(node);
+//     std::cout << "Leaf " << num_cells << std::endl;
+//     for (uint32_t i = 0; i < num_cells; ++i) {
+//         uint32_t key = *LeafNodeKey(node, i);
+//         std::cout << "  - " << i << " : " << key << std::endl;
+//     }
+// }
+void LitDatabase::Indent(uint32_t level) {
+    for (uint32_t i = 0; i < level; ++i) {
+        std::cout << " ";
+    }
+}
+void LitDatabase::PrintTree(Pager* pager, uint32_t page_num, uint32_t indentation_level) {
+    void* node = GetPage(pager, page_num);
+    uint32_t num_keys, child;
+    switch (get_node_type(node)) {
+        case NODE_LEAF:
+            num_keys = *LeafNodeNumCells(node);
+            Indent(indentation_level);
+            std::cout << "- leaf (size " << num_keys << ")" << std::endl;
+            for (uint32_t i = 0; i < num_keys; ++i) {
+                Indent(indentation_level + 1);
+                std::cout << "- " << *LeafNodeKey(node, i) << std::endl;
+            }
+            break;
+        case NODE_INTERNAL:
+            num_keys = *InternalNodeNumKeys(node);
+            Indent(indentation_level);
+            std::cout << "- internal (size " << num_keys << ")" << std::endl;
+            for (uint32_t i = 0; i < num_keys; ++i) {
+                child = *InternalNodeChild(node, i);
+                PrintTree(pager, child, indentation_level + 1);
+
+                Indent(indentation_level + 1);
+                std::cout << "- key " << *InternalNodeKey(node, i) << std::endl;
+            }
+            child = *InternalNodeRightChild(node);
+            PrintTree(pager, child, indentation_level + 1);
+            break;
     }
 }
 
@@ -401,4 +439,102 @@ NodeType LitDatabase::get_node_type(void* node) {
 void LitDatabase::set_node_type(void* node, NodeType type) {
     uint8_t value = type;
     *static_cast<uint8_t*>(static_cast<void*>(static_cast<unsigned char*>(node) + NODE_TYPE_OFFSET)) = value;
+}
+
+void LitDatabase::LeafNodeSplitAndInsert(Cursor* cursor, uint32_t key, const Row& value) {
+    void* old_node = GetPage(cursor->table->pager, cursor->page_num);
+    uint32_t new_page_num = GetUnusedPageNum(cursor->table->pager);
+    void* new_node = GetPage(cursor->table->pager, new_page_num);
+    InitializeLeafNode(new_node);
+
+    for (int32_t i = LEAF_NODE_MAX_CELLS; i >= 0; --i) {
+        void* destination_node;
+        if (i >= LEAF_NODE_LEFT_SPLIT_COUNT) {
+            destination_node = new_node;
+        } else {
+            destination_node = old_node;
+        }
+        uint32_t index_within_node = i % LEAF_NODE_LEFT_SPLIT_COUNT;
+        void* destination = LeafNodeCell(destination_node, index_within_node);
+
+        if (i == cursor->cell_num) {
+            SerializeRow(value, destination);
+        } else if (i > cursor->cell_num) {
+            memcpy(destination, LeafNodeCell(old_node, i - 1), LEAF_NODE_CELL_SIZE);
+        } else {
+            memcpy(destination, LeafNodeCell(old_node, i), LEAF_NODE_CELL_SIZE);
+        }
+    }
+
+    *LeafNodeNumCells(old_node) = LEAF_NODE_LEFT_SPLIT_COUNT;
+    *LeafNodeNumCells(new_node) = LEAF_NODE_RIGHT_SPLIT_COUNT;
+
+    if (is_node_root(old_node)) {
+        return CreateNewRoot(cursor->table, new_page_num);
+    } else {
+        std::cout << "Need to implement updating parent after split" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+}
+
+void LitDatabase::CreateNewRoot(Table* table, uint32_t right_child_page_num) {
+    void* root = GetPage(table->pager, table->root_page_num);
+    void* right_child = GetPage(table->pager, right_child_page_num);
+    uint32_t left_child_page_num = GetUnusedPageNum(table->pager);
+    void* left_child = GetPage(table->pager, left_child_page_num);
+
+    memcpy(left_child, root, PAGE_SIZE);
+    set_node_root(left_child, false);
+    InitializeInternalNode(root);
+    set_node_root(root, true);
+    *InternalNodeNumKeys(root) = 1;
+    *InternalNodeChild(root, 0) = left_child_page_num;
+    uint32_t left_child_max_key = GetNodeMaxKey(left_child);
+    *InternalNodeKey(root, 0) = left_child_max_key;
+    *InternalNodeRightChild(root) = right_child_page_num;
+}
+
+uint32_t* LitDatabase::InternalNodeNumKeys(void* node) {
+    return static_cast<uint32_t*>(
+        static_cast<void*>(static_cast<unsigned char*>(node) + INTERNAL_NODE_NUM_KEYS_OFFSET));
+}
+uint32_t* LitDatabase::InternalNodeRightChild(void* node) {
+    return static_cast<uint32_t*>(
+        static_cast<void*>(static_cast<unsigned char*>(node) + INTERNAL_NODE_RIGHT_CHILD_OFFSET));
+}
+uint32_t* LitDatabase::InternalNodeCell(void* node, uint32_t cell_num) {
+    return static_cast<uint32_t*>(static_cast<void*>(static_cast<unsigned char*>(node) + INTERNAL_NODE_HEADER_SIZE +
+                                                     cell_num * INTERNAL_NODE_CELL_SIZE));
+}
+uint32_t* LitDatabase::InternalNodeChild(void* node, uint32_t child_num) {
+    uint32_t num_keys = *InternalNodeNumKeys(node);
+    if (child_num > num_keys) {
+        std::cout << "try to access unvalid child_num" << std::endl;
+        exit(EXIT_FAILURE);
+    } else if (child_num == num_keys) {
+        return InternalNodeRightChild(node);
+    } else {
+        return InternalNodeCell(node, child_num);
+    }
+}
+uint32_t* LitDatabase::InternalNodeKey(void* node, uint32_t key_num) {
+    return static_cast<uint32_t*>(static_cast<void*>(
+        static_cast<unsigned char*>(static_cast<void*>(InternalNodeCell(node, key_num))) + INTERNAL_NODE_CHILD_SIZE));
+}
+uint32_t LitDatabase::GetNodeMaxKey(void* node) {
+    switch (get_node_type(node)) {
+        case NODE_INTERNAL: return *InternalNodeKey(node, *InternalNodeNumKeys(node) - 1);
+        case NODE_LEAF: return *LeafNodeKey(node, *LeafNodeNumCells(node) - 1);
+    }
+}
+
+uint32_t LitDatabase::GetUnusedPageNum(Pager* pager) { return pager->num_pages; }
+
+bool LitDatabase::is_node_root(void* node) {
+    uint8_t value = *static_cast<uint8_t*>(static_cast<void*>(static_cast<unsigned char*>(node) + IS_ROOT_OFFSET));
+    return value;
+}
+void LitDatabase::set_node_root(void* node, bool is_root) {
+    uint8_t value = is_root;
+    *static_cast<uint8_t*>(static_cast<void*>(static_cast<unsigned char*>(node) + IS_ROOT_OFFSET)) = value;
 }
