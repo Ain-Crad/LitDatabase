@@ -49,6 +49,7 @@ int main(int argc, char* argv[]) {
         switch (lit_db.ExecuteStatement(&statement, table)) {
             case EXECUTE_SUCCESS: std::cout << "Executed." << std::endl; break;
             case EXECUTE_TABLE_FULL: std::cout << "Error: Table full." << std::endl; break;
+            case EXECUTE_DUPLICATE_KEY: std::cout << "Error: Duplicate key." << std::endl; break;
         }
     }
 }

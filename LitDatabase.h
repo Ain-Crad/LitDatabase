@@ -20,7 +20,7 @@ enum ParseStatementResult {
     PARSE_STATEMENT_NEGATIVE_ID
 };
 enum StatementType { STATEMENT_INSERT, STATEMENT_SELECT };
-enum ExecuteResult { EXECUTE_SUCCESS, EXECUTE_TABLE_FULL };
+enum ExecuteResult { EXECUTE_SUCCESS, EXECUTE_TABLE_FULL, EXECUTE_DUPLICATE_KEY };
 
 struct Row {
     uint32_t id = -1;
@@ -112,8 +112,6 @@ const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_
 
 class LitDatabase {
 public:
-    // LitDatabase() { statement.type = STATEMENT_INVALID; }
-
     void PrintPrompt();
 
     void ReadInput();
@@ -129,7 +127,8 @@ public:
     void PagerFlush(Pager* pager, uint32_t page_num);
 
     Cursor* TableStart(Table* table);
-    Cursor* TableEnd(Table* table);
+    // Cursor* TableEnd(Table* table);
+    Cursor* TableFind(Table* table, uint32_t key);
     void* CursorValue(Cursor* cursor);
     void CursorAdvance(Cursor* cursor);
 
@@ -139,6 +138,10 @@ public:
     void* LeafNodeValue(void* node, uint32_t cell_num);
     void LeafNodeInsert(Cursor* cursor, uint32_t key, const Row& value);
     void InitializeLeafNode(void* node);
+    Cursor* LeafNodeFind(Table* table, uint32_t page_num, uint32_t key);
+
+    NodeType get_node_type(void* node);
+    void set_node_type(void* node, NodeType type);
 
     std::string get_input_buffer() { return input_buffer; }
 
