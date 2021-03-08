@@ -2,7 +2,9 @@
 #define LITDATABASE_H
 
 #include <cassert>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -21,11 +23,9 @@ enum StatementType { STATEMENT_INSERT, STATEMENT_SELECT };
 enum ExecuteResult { EXECUTE_SUCCESS, EXECUTE_TABLE_FULL };
 
 struct Row {
-    uint32_t id;
-    // std::string username;
-    // std::string email;
-    char username[COLUMN_USERNAME_SIZE + 1];
-    char email[COLUMN_EMAIL_SIZE + 1];
+    uint32_t id = -1;
+    char username[COLUMN_USERNAME_SIZE + 1] = {'\0'};
+    char email[COLUMN_EMAIL_SIZE + 1] = {'\0'};
 };
 
 constexpr uint32_t ID_SIZE = sizeof(uint32_t);
@@ -41,21 +41,37 @@ constexpr uint32_t TABLE_MAX_PAGES = 100;
 constexpr uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
 const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;
 
-struct Table {
-    Table() {
-        num_rows = 0;
-        for (int i = 0; i < TABLE_MAX_PAGES; ++i) {
+struct Pager {
+    Pager() : fd(nullptr), file_length(0) {
+        for (uint32_t i = 0; i < TABLE_MAX_PAGES; ++i) {
             pages[i] = nullptr;
         }
     }
-    ~Table() {
-        for (int i = 0; i < TABLE_MAX_PAGES; ++i) {
+
+    Pager(std::fstream* _fd, uint32_t _len) : fd(_fd), file_length(_len) {
+        for (uint32_t i = 0; i < TABLE_MAX_PAGES; ++i) {
+            pages[i] = nullptr;
+        }
+    }
+
+    ~Pager() {
+        delete fd;
+        for (uint32_t i = 0; i < TABLE_MAX_PAGES; ++i) {
             if (pages[i]) free(pages[i]);
         }
     }
 
-    uint32_t num_rows;
+    std::fstream* fd;
+    uint32_t file_length;
     void* pages[TABLE_MAX_PAGES];
+};
+
+struct Table {
+    Table() : num_rows(0), pager(nullptr) {}
+    ~Table() { delete pager; }
+
+    uint32_t num_rows;
+    Pager* pager;
 };
 
 struct Statement {
@@ -69,16 +85,22 @@ public:
 
     void PrintPrompt();
     void ReadInput();
-    void Parse();
-    ParseMetaResult ParseMeta();
+    ParseMetaResult ParseMeta(Table*);
     ParseStatementResult ParseStatement(Statement*);
+    ParseStatementResult ParseInsert(Statement*);
     ExecuteResult ExecuteStatement(Statement* statement, Table* table);
 
     void* RowSlot(Table* table, uint32_t row_num);
+    Table* DbOpen(const char* filename);
+    Pager* PagerOpen();
+    void* GetPage(Pager* pager, uint32_t page_num);
+    void DbClose(Table* table);
+    void PagerFlush(Pager* pager, uint32_t page_num, uint32_t sz);
 
     std::string get_input_buffer() { return input_buffer; }
 
-    const char* cur = nullptr;
+    char* cur = nullptr;
+    const char* file_name = nullptr;
 
 private:
     std::string input_buffer;
