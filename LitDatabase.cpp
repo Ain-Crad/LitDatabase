@@ -23,6 +23,14 @@ ParseMetaResult LitDatabase::ParseMeta(Table* table) {
     if (strcmp(cur, ".exit") == 0) {
         DbClose(table);
         exit(EXIT_SUCCESS);
+    } else if (strcmp(cur, ".constants") == 0) {
+        std::cout << "Constants: " << std::endl;
+        PrintConstants();
+        return PARSE_META_SUCCESS;
+    } else if (strcmp(cur, ".btree") == 0) {
+        std::cout << "Tree: " << std::endl;
+        PrintLeafNode(GetPage(table->pager, 0));
+        return PARSE_META_SUCCESS;
     } else {
         cur = nullptr;
         return PARSE_META_UNRECOGNIZED;
@@ -82,12 +90,15 @@ ExecuteResult LitDatabase::ExecuteStatement(Statement* statement, Table* table) 
 }
 
 ExecuteResult LitDatabase::ExecuteInsert(Statement* statement, Table* table) {
-    if (table->num_rows >= TABLE_MAX_ROWS) return EXECUTE_TABLE_FULL;
+    void* node = GetPage(table->pager, table->root_page_num);
+    if ((*LeafNodeNumCells(node) >= LEAF_NODE_MAX_CELLS)) {
+        return EXECUTE_TABLE_FULL;
+    }
 
     Row row = statement->row_to_insert;
     Cursor* cursor = TableEnd(table);
-    SerializeRow(row, CursorValue(cursor));
-    table->num_rows += 1;
+
+    LeafNodeInsert(cursor, row.id, row);
 
     free(cursor);
 
@@ -112,12 +123,9 @@ ExecuteResult LitDatabase::ExecuteSelect(Statement* statement, Table* table) {
 void LitDatabase::PrintRow(const Row& row) { printf("(%d, %s, %s)\n", row.id, row.username, row.email); }
 
 void* LitDatabase::CursorValue(Cursor* cursor) {
-    uint32_t row_num = cursor->row_num;
-    uint32_t page_num = row_num / ROWS_PER_PAGE;
+    uint32_t page_num = cursor->page_num;
     void* page = GetPage(cursor->table->pager, page_num);
-    uint32_t row_offset = row_num % ROWS_PER_PAGE;
-    uint32_t byte_offset = row_offset * ROW_SIZE;
-    return static_cast<void*>(static_cast<unsigned char*>(page) + byte_offset);
+    return LeafNodeValue(page, cursor->cell_num);
 }
 
 void LitDatabase::SerializeRow(const Row& source, void* destination) {
@@ -135,11 +143,15 @@ void LitDatabase::DeserializeRow(void* source, Row* destination) {
 Table* LitDatabase::DbOpen(const char* filename) {
     file_name = filename;
     Pager* pager = PagerOpen();
-    uint32_t num_rows = pager->file_length / ROW_SIZE;
 
     Table* table = new Table();
     table->pager = pager;
-    table->num_rows = num_rows;
+    table->root_page_num = 0;
+
+    if (pager->num_pages == 0) {
+        void* root_node = GetPage(pager, 0);
+        InitializeLeafNode(root_node);
+    }
 
     return table;
 }
@@ -170,6 +182,11 @@ Pager* LitDatabase::PagerOpen() {
     Pager* pager = new Pager();
     pager->fd = fd;
     pager->file_length = file_length;
+    pager->num_pages = file_length / PAGE_SIZE;
+    if (file_length % PAGE_SIZE != 0) {
+        std::cout << "Db file is not a whole number of pages. Corrupt file." << std::endl;
+        exit(EXIT_FAILURE);
+    }
 
     return pager;
 }
@@ -197,6 +214,10 @@ void* LitDatabase::GetPage(Pager* pager, uint32_t page_num) {
             pager->fd->clear();
         }
         pager->pages[page_num] = page;
+
+        if (page_num >= pager->num_pages) {
+            pager->num_pages = page_num + 1;
+        }
     }
 
     return pager->pages[page_num];
@@ -204,24 +225,12 @@ void* LitDatabase::GetPage(Pager* pager, uint32_t page_num) {
 
 void LitDatabase::DbClose(Table* table) {
     Pager* pager = table->pager;
-    uint32_t num_full_pages = table->num_rows / ROWS_PER_PAGE;
 
-    for (uint32_t i = 0; i < num_full_pages; ++i) {
+    for (uint32_t i = 0; i < pager->num_pages; ++i) {
         if (pager->pages[i] == nullptr) continue;
-        PagerFlush(pager, i, PAGE_SIZE);
+        PagerFlush(pager, i);
         free(pager->pages[i]);
         pager->pages[i] = nullptr;
-    }
-
-    // deal with partial page
-    uint32_t num_additional_rows = table->num_rows % ROWS_PER_PAGE;
-    if (num_additional_rows > 0) {
-        uint32_t page_num = num_full_pages;
-        if (pager->pages[page_num] != nullptr) {
-            PagerFlush(pager, page_num, num_additional_rows * ROW_SIZE);
-            free(pager->pages[page_num]);
-            pager->pages[page_num] = nullptr;
-        }
     }
 
     if (pager->fd->is_open()) pager->fd->close();
@@ -233,7 +242,7 @@ void LitDatabase::DbClose(Table* table) {
     delete table;
 }
 
-void LitDatabase::PagerFlush(Pager* pager, uint32_t page_num, uint32_t sz) {
+void LitDatabase::PagerFlush(Pager* pager, uint32_t page_num) {
     pager->fd->open(file_name, std::fstream::out);
     if (pager->pages[page_num] == nullptr) {
         std::cout << "Tried to flush null page." << std::endl;
@@ -245,7 +254,8 @@ void LitDatabase::PagerFlush(Pager* pager, uint32_t page_num, uint32_t sz) {
         std::cout << "Error seeking." << std::endl;
         exit(EXIT_FAILURE);
     }
-    pager->fd->write(static_cast<char*>(pager->pages[page_num]), sz);
+
+    pager->fd->write(static_cast<char*>(pager->pages[page_num]), PAGE_SIZE);
     if (pager->fd->fail()) {
         std::cout << "Error writing." << std::endl;
         exit(EXIT_FAILURE);
@@ -255,23 +265,92 @@ void LitDatabase::PagerFlush(Pager* pager, uint32_t page_num, uint32_t sz) {
 Cursor* LitDatabase::TableStart(Table* table) {
     Cursor* cursor = static_cast<Cursor*>(malloc(sizeof(Cursor)));
     cursor->table = table;
-    cursor->row_num = 0;
-    cursor->end_of_table = (table->num_rows == 0);
+    cursor->page_num = table->root_page_num;
+    cursor->cell_num = 0;
+
+    void* root_node = GetPage(table->pager, table->root_page_num);
+    uint32_t num_cells = *LeafNodeNumCells(root_node);
+    cursor->end_of_table = (num_cells == 0);
 
     return cursor;
 }
 Cursor* LitDatabase::TableEnd(Table* table) {
     Cursor* cursor = static_cast<Cursor*>(malloc(sizeof(Cursor)));
     cursor->table = table;
-    cursor->row_num = table->num_rows;
+    cursor->page_num = table->root_page_num;
+
+    void* root_node = GetPage(table->pager, table->root_page_num);
+    uint32_t num_cells = *LeafNodeNumCells(root_node);
+    cursor->cell_num = num_cells;
     cursor->end_of_table = true;
 
     return cursor;
 }
 
 void LitDatabase::CursorAdvance(Cursor* cursor) {
-    cursor->row_num += 1;
-    if (cursor->row_num >= cursor->table->num_rows) {
+    uint32_t page_num = cursor->page_num;
+    void* node = GetPage(cursor->table->pager, page_num);
+
+    cursor->cell_num += 1;
+    if (cursor->cell_num >= (*LeafNodeNumCells(node))) {
         cursor->end_of_table = true;
+    }
+}
+
+uint32_t* LitDatabase::LeafNodeNumCells(void* node) {
+    return static_cast<uint32_t*>(static_cast<void*>(static_cast<unsigned char*>(node) + LEAF_NODE_NUM_CELLS_OFFSET));
+}
+
+void* LitDatabase::LeafNodeCell(void* node, uint32_t cell_num) {
+    return static_cast<void*>(static_cast<unsigned char*>(node) + LEAF_NODE_HEADER_SIZE +
+                              cell_num * LEAF_NODE_CELL_SIZE);
+}
+
+uint32_t* LitDatabase::LeafNodeKey(void* node, uint32_t cell_num) {
+    return static_cast<uint32_t*>(LeafNodeCell(node, cell_num));
+}
+
+void* LitDatabase::LeafNodeValue(void* node, uint32_t cell_num) {
+    return static_cast<void*>(static_cast<unsigned char*>(LeafNodeCell(node, cell_num)) + LEAF_NODE_KEY_SIZE);
+}
+
+void LitDatabase::LeafNodeInsert(Cursor* cursor, uint32_t key, const Row& value) {
+    void* node = GetPage(cursor->table->pager, cursor->page_num);
+
+    uint32_t num_cells = *LeafNodeNumCells(node);
+    if (num_cells >= LEAF_NODE_MAX_CELLS) {
+        // node full
+        std::cout << "Need to implement splitting a leaf node." << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    if (cursor->cell_num < num_cells) {
+        // make room for new cell
+        for (uint32_t i = num_cells; i > cursor->cell_num; --i) {
+            memcpy(LeafNodeCell(node, i), LeafNodeCell(node, i - 1), LEAF_NODE_CELL_SIZE);
+        }
+    }
+
+    *(LeafNodeNumCells(node)) += 1;
+    *(LeafNodeKey(node, cursor->cell_num)) = key;
+    SerializeRow(value, LeafNodeValue(node, cursor->cell_num));
+}
+
+void LitDatabase::InitializeLeafNode(void* node) { *LeafNodeNumCells(node) = 0; }
+
+void LitDatabase::PrintConstants() {
+    std::cout << "ROW_SIZE: " << ROW_SIZE << std::endl;
+    std::cout << "COMMON_NODE_HEADER_SIZE: " << static_cast<uint32_t>(COMMON_NODE_HEADER_SIZE) << std::endl;
+    std::cout << "LEAF_NODE_HEADER_SIZE: " << LEAF_NODE_HEADER_SIZE << std::endl;
+    std::cout << "LEAF_NODE_CELL_SIZE: " << LEAF_NODE_CELL_SIZE << std::endl;
+    std::cout << "LEAF_NODE_MAX_CELLS: " << LEAF_NODE_MAX_CELLS << std::endl;
+}
+
+void LitDatabase::PrintLeafNode(void* node) {
+    uint32_t num_cells = *LeafNodeNumCells(node);
+    std::cout << "Leaf " << num_cells << std::endl;
+    for (uint32_t i = 0; i < num_cells; ++i) {
+        uint32_t key = *LeafNodeKey(node, i);
+        std::cout << "  - " << i << " : " << key << std::endl;
     }
 }

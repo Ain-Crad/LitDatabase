@@ -38,8 +38,6 @@ const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
 
 constexpr uint32_t PAGE_SIZE = 4096;
 constexpr uint32_t TABLE_MAX_PAGES = 100;
-constexpr uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;
-const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;
 
 struct Pager {
     Pager() : fd(nullptr), file_length(0) {
@@ -63,14 +61,16 @@ struct Pager {
 
     std::fstream* fd;
     uint32_t file_length;
+    uint32_t num_pages;
     void* pages[TABLE_MAX_PAGES];
 };
 
 struct Table {
-    Table() : num_rows(0), pager(nullptr) {}
+    Table() : root_page_num(0), pager(nullptr) {}
     ~Table() { delete pager; }
 
-    uint32_t num_rows;
+    // uint32_t num_rows;
+    uint32_t root_page_num;
     Pager* pager;
 };
 
@@ -81,32 +81,64 @@ struct Statement {
 
 struct Cursor {
     Table* table;
-    uint32_t row_num;
+    uint32_t page_num;
+    uint32_t cell_num;
     bool end_of_table;  // the position one past the last element
 };
+
+enum NodeType { NODE_INTERNAL, NODE_LEAF };
+// common node header layout
+const uint32_t NODE_TYPE_SIZE = sizeof(uint8_t);
+const uint32_t NODE_TYPE_OFFSET = 0;
+const uint32_t IS_ROOT_SIZE = sizeof(uint8_t);
+const uint32_t IS_ROOT_OFFSET = NODE_TYPE_SIZE;
+const uint32_t PARENT_POINTER_SIZE = sizeof(uint32_t);
+const uint32_t PARENT_POINTER_OFFSET = IS_ROOT_OFFSET + IS_ROOT_SIZE;
+const uint8_t COMMON_NODE_HEADER_SIZE = NODE_TYPE_SIZE + IS_ROOT_SIZE + PARENT_POINTER_SIZE;
+
+// leaf node header layout
+const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
+const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
+const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE;
+
+// leaf node body layout
+const uint32_t LEAF_NODE_KEY_SIZE = sizeof(uint32_t);
+const uint32_t LEAF_NODE_KEY_OFFSET = 0;
+const uint32_t LEAF_NODE_VALUE_SIZE = ROW_SIZE;
+const uint32_t LEAF_NODE_VALUE_OFFSET = LEAF_NODE_KEY_OFFSET + LEAF_NODE_KEY_SIZE;
+const uint32_t LEAF_NODE_CELL_SIZE = LEAF_NODE_KEY_SIZE + LEAF_NODE_VALUE_SIZE;
+const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
+const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
 
 class LitDatabase {
 public:
     // LitDatabase() { statement.type = STATEMENT_INVALID; }
 
     void PrintPrompt();
+
     void ReadInput();
     ParseMetaResult ParseMeta(Table*);
     ParseStatementResult ParseStatement(Statement*);
     ParseStatementResult ParseInsert(Statement*);
     ExecuteResult ExecuteStatement(Statement* statement, Table* table);
 
-    // void* RowSlot(Table* table, uint32_t row_num);
     Table* DbOpen(const char* filename);
     Pager* PagerOpen();
     void* GetPage(Pager* pager, uint32_t page_num);
     void DbClose(Table* table);
-    void PagerFlush(Pager* pager, uint32_t page_num, uint32_t sz);
+    void PagerFlush(Pager* pager, uint32_t page_num);
 
     Cursor* TableStart(Table* table);
     Cursor* TableEnd(Table* table);
     void* CursorValue(Cursor* cursor);
     void CursorAdvance(Cursor* cursor);
+
+    uint32_t* LeafNodeNumCells(void* node);
+    void* LeafNodeCell(void* node, uint32_t cell_num);
+    uint32_t* LeafNodeKey(void* node, uint32_t cell_num);
+    void* LeafNodeValue(void* node, uint32_t cell_num);
+    void LeafNodeInsert(Cursor* cursor, uint32_t key, const Row& value);
+    void InitializeLeafNode(void* node);
 
     std::string get_input_buffer() { return input_buffer; }
 
@@ -123,6 +155,9 @@ private:
     void DeserializeRow(void* source, Row* destination);
     ExecuteResult ExecuteInsert(Statement* statement, Table* table);
     ExecuteResult ExecuteSelect(Statement* statement, Table* table);
+
+    void PrintConstants();
+    void PrintLeafNode(void* node);
 };
 
 #endif
