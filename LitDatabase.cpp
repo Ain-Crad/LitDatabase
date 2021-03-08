@@ -84,23 +84,41 @@ ExecuteResult LitDatabase::ExecuteStatement(Statement* statement, Table* table) 
 ExecuteResult LitDatabase::ExecuteInsert(Statement* statement, Table* table) {
     if (table->num_rows >= TABLE_MAX_ROWS) return EXECUTE_TABLE_FULL;
 
-    Row* row = &(statement->row_to_insert);
-    SerializeRow(*row, RowSlot(table, table->num_rows));
+    Row row = statement->row_to_insert;
+    Cursor* cursor = TableEnd(table);
+    SerializeRow(row, CursorValue(cursor));
     table->num_rows += 1;
+
+    free(cursor);
 
     return EXECUTE_SUCCESS;
 }
 
 ExecuteResult LitDatabase::ExecuteSelect(Statement* statement, Table* table) {
+    Cursor* cursor = TableStart(table);
+
     Row row;
-    for (uint32_t i = 0; i < table->num_rows; ++i) {
-        DeserializeRow(RowSlot(table, i), &row);
+    while (!(cursor->end_of_table)) {
+        DeserializeRow(CursorValue(cursor), &row);
         PrintRow(row);
+        CursorAdvance(cursor);
     }
+
+    free(cursor);
+
     return EXECUTE_SUCCESS;
 }
 
 void LitDatabase::PrintRow(const Row& row) { printf("(%d, %s, %s)\n", row.id, row.username, row.email); }
+
+void* LitDatabase::CursorValue(Cursor* cursor) {
+    uint32_t row_num = cursor->row_num;
+    uint32_t page_num = row_num / ROWS_PER_PAGE;
+    void* page = GetPage(cursor->table->pager, page_num);
+    uint32_t row_offset = row_num % ROWS_PER_PAGE;
+    uint32_t byte_offset = row_offset * ROW_SIZE;
+    return static_cast<void*>(static_cast<unsigned char*>(page) + byte_offset);
+}
 
 void LitDatabase::SerializeRow(const Row& source, void* destination) {
     memcpy(static_cast<unsigned char*>(destination) + ID_OFFSET, &(source.id), ID_SIZE);
@@ -112,14 +130,6 @@ void LitDatabase::DeserializeRow(void* source, Row* destination) {
     memcpy(&(destination->id), static_cast<unsigned char*>(source) + ID_OFFSET, ID_SIZE);
     memcpy(&(destination->username), static_cast<unsigned char*>(source) + USERNAME_OFFSET, USERNAME_SIZE);
     memcpy((&destination->email), static_cast<unsigned char*>(source) + EMAIL_OFFSET, EMAIL_SIZE);
-}
-
-void* LitDatabase::RowSlot(Table* table, uint32_t row_num) {
-    uint32_t page_num = row_num / ROWS_PER_PAGE;
-    void* page = GetPage(table->pager, page_num);
-    uint32_t row_offset = row_num % ROWS_PER_PAGE;
-    uint32_t byte_offset = row_offset * ROW_SIZE;
-    return static_cast<void*>(static_cast<unsigned char*>(page) + byte_offset);
 }
 
 Table* LitDatabase::DbOpen(const char* filename) {
@@ -182,10 +192,7 @@ void* LitDatabase::GetPage(Pager* pager, uint32_t page_num) {
             pager->fd->open(file_name, std::fstream::in);
             pager->fd->seekg(page_num * PAGE_SIZE, std::fstream::beg);
             pager->fd->read(static_cast<char*>(page), PAGE_SIZE);
-            // if (pager->fd->fail()) {
-            //     std::cout << "Error reading file" << std::endl;
-            //     exit(EXIT_FAILURE);
-            // }
+
             pager->fd->close();
             pager->fd->clear();
         }
@@ -242,5 +249,29 @@ void LitDatabase::PagerFlush(Pager* pager, uint32_t page_num, uint32_t sz) {
     if (pager->fd->fail()) {
         std::cout << "Error writing." << std::endl;
         exit(EXIT_FAILURE);
+    }
+}
+
+Cursor* LitDatabase::TableStart(Table* table) {
+    Cursor* cursor = static_cast<Cursor*>(malloc(sizeof(Cursor)));
+    cursor->table = table;
+    cursor->row_num = 0;
+    cursor->end_of_table = (table->num_rows == 0);
+
+    return cursor;
+}
+Cursor* LitDatabase::TableEnd(Table* table) {
+    Cursor* cursor = static_cast<Cursor*>(malloc(sizeof(Cursor)));
+    cursor->table = table;
+    cursor->row_num = table->num_rows;
+    cursor->end_of_table = true;
+
+    return cursor;
+}
+
+void LitDatabase::CursorAdvance(Cursor* cursor) {
+    cursor->row_num += 1;
+    if (cursor->row_num >= cursor->table->num_rows) {
+        cursor->end_of_table = true;
     }
 }

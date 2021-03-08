@@ -79,6 +79,12 @@ struct Statement {
     Row row_to_insert;
 };
 
+struct Cursor {
+    Table* table;
+    uint32_t row_num;
+    bool end_of_table;  // the position one past the last element
+};
+
 class LitDatabase {
 public:
     // LitDatabase() { statement.type = STATEMENT_INVALID; }
@@ -90,12 +96,17 @@ public:
     ParseStatementResult ParseInsert(Statement*);
     ExecuteResult ExecuteStatement(Statement* statement, Table* table);
 
-    void* RowSlot(Table* table, uint32_t row_num);
+    // void* RowSlot(Table* table, uint32_t row_num);
     Table* DbOpen(const char* filename);
     Pager* PagerOpen();
     void* GetPage(Pager* pager, uint32_t page_num);
     void DbClose(Table* table);
     void PagerFlush(Pager* pager, uint32_t page_num, uint32_t sz);
+
+    Cursor* TableStart(Table* table);
+    Cursor* TableEnd(Table* table);
+    void* CursorValue(Cursor* cursor);
+    void CursorAdvance(Cursor* cursor);
 
     std::string get_input_buffer() { return input_buffer; }
 
@@ -104,7 +115,6 @@ public:
 
 private:
     std::string input_buffer;
-    // Statement statement;
 
     void ParseWhitespace();
 
