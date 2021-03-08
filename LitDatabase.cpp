@@ -289,8 +289,7 @@ Cursor* LitDatabase::TableFind(Table* table, uint32_t key) {
     if (get_node_type(root_node) == NODE_LEAF) {
         return LeafNodeFind(table, root_page_num, key);
     } else {
-        std::cout << "Need to implement searching an internal node." << std::endl;
-        exit(EXIT_FAILURE);
+        return InternalNodeFind(table, root_page_num, key);
     }
 }
 
@@ -521,6 +520,32 @@ uint32_t* LitDatabase::InternalNodeKey(void* node, uint32_t key_num) {
     return static_cast<uint32_t*>(static_cast<void*>(
         static_cast<unsigned char*>(static_cast<void*>(InternalNodeCell(node, key_num))) + INTERNAL_NODE_CHILD_SIZE));
 }
+
+Cursor* LitDatabase::InternalNodeFind(Table* table, uint32_t page_num, uint32_t key) {
+    void* node = GetPage(table->pager, page_num);
+    uint32_t num_keys = *InternalNodeNumKeys(node);
+
+    // binary search
+    uint32_t min_index = 0;
+    uint32_t max_index = num_keys;
+    while (min_index != max_index) {
+        uint32_t index = (min_index + max_index) / 2;
+        uint32_t key_to_right = *InternalNodeKey(node, index);
+        if (key_to_right >= key) {
+            max_index = index;
+        } else {
+            min_index = index + 1;
+        }
+    }
+
+    uint32_t child_num = *InternalNodeChild(node, min_index);
+    void* child = GetPage(table->pager, child_num);
+    switch (get_node_type(child)) {
+        case NODE_LEAF: return LeafNodeFind(table, child_num, key);
+        case NODE_INTERNAL: return InternalNodeFind(table, child_num, key);
+    }
+}
+
 uint32_t LitDatabase::GetNodeMaxKey(void* node) {
     switch (get_node_type(node)) {
         case NODE_INTERNAL: return *InternalNodeKey(node, *InternalNodeNumKeys(node) - 1);

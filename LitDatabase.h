@@ -163,6 +163,7 @@ public:
     uint32_t* InternalNodeCell(void* node, uint32_t cell_num);
     uint32_t* InternalNodeChild(void* node, uint32_t child_num);
     uint32_t* InternalNodeKey(void* node, uint32_t key_num);
+    Cursor* InternalNodeFind(Table* table, uint32_t root_page_num, uint32_t key);
 
     uint32_t GetNodeMaxKey(void* node);
     uint32_t GetUnusedPageNum(Pager* pager);
