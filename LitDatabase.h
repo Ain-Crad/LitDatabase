@@ -109,6 +109,9 @@ const uint32_t INTERNAL_NODE_KEY_SIZE = sizeof(uint32_t);
 const uint32_t INTERNAL_NODE_CHILD_SIZE = sizeof(uint32_t);
 const uint32_t INTERNAL_NODE_CELL_SIZE = INTERNAL_NODE_CHILD_SIZE + INTERNAL_NODE_KEY_SIZE;
 
+// keep this small for testing
+const uint32_t INTERNAL_NODE_MAX_CELLS = 3;
+
 // leaf node header layout
 const uint32_t LEAF_NODE_NUM_CELLS_SIZE = sizeof(uint32_t);
 const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
@@ -168,6 +171,10 @@ public:
     uint32_t* InternalNodeChild(void* node, uint32_t child_num);
     uint32_t* InternalNodeKey(void* node, uint32_t key_num);
     Cursor* InternalNodeFind(Table* table, uint32_t root_page_num, uint32_t key);
+    uint32_t* NodeParent(void* node);
+    void UpdateInternalNodeKey(void* node, uint32_t old_key, uint32_t new_key);
+    uint32_t InternalNodeFindChild(void* node, uint32_t key);
+    void InternalNodeInsert(Table* table, uint32_t parent_page_num, uint32_t child_page_num);
 
     uint32_t GetNodeMaxKey(void* node);
     uint32_t GetUnusedPageNum(Pager* pager);
