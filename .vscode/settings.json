@@ -83,6 +83,15 @@
         "queue": "cpp",
         "cctype": "cpp",
         "deque": "cpp",
-        "iomanip": "cpp"
+        "iomanip": "cpp",
+        "clocale": "cpp",
+        "cstdarg": "cpp",
+        "cwctype": "cpp",
+        "array": "cpp",
+        "atomic": "cpp",
+        "*.tcc": "cpp",
+        "memory_resource": "cpp",
+        "optional": "cpp",
+        "string_view": "cpp"
     }
 }

@@ -1,6 +1,11 @@
 #ifndef LITDATABASE_H
 #define LITDATABASE_H
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -55,13 +60,16 @@ struct Pager {
     ~Pager() {
         delete fd;
         for (uint32_t i = 0; i < TABLE_MAX_PAGES; ++i) {
-            if (pages[i]) free(pages[i]);
+            if (pages[i]) free(pages[i]), pages[i] = nullptr;
         }
     }
 
     std::fstream* fd;
     uint32_t file_length;
     uint32_t num_pages;
+    // linux
+    int file_descriptor;
+    // linux
     void* pages[TABLE_MAX_PAGES];
 };
 
@@ -118,7 +126,7 @@ const uint32_t LEAF_NODE_NUM_CELLS_OFFSET = COMMON_NODE_HEADER_SIZE;
 // const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE;
 const uint32_t LEAF_NODE_NEXT_LEAF_SIZE = sizeof(uint32_t);
 const uint32_t LEAF_NODE_NEXT_LEAF_OFFSET = LEAF_NODE_NUM_CELLS_OFFSET + LEAF_NODE_NUM_CELLS_SIZE;
-const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE + LEAF_NODE_NEXT_LEAF_OFFSET;
+const uint32_t LEAF_NODE_HEADER_SIZE = COMMON_NODE_HEADER_SIZE + LEAF_NODE_NUM_CELLS_SIZE + LEAF_NODE_NEXT_LEAF_SIZE;
 
 // leaf node body layout
 const uint32_t LEAF_NODE_KEY_SIZE = sizeof(uint32_t);
@@ -130,6 +138,7 @@ const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
 const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
 const uint32_t LEAF_NODE_RIGHT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) / 2;
 const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT = LEAF_NODE_MAX_CELLS + 1 - LEAF_NODE_RIGHT_SPLIT_COUNT;
+// const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT = LEAF_NODE_MAX_CELLS - LEAF_NODE_RIGHT_SPLIT_COUNT;
 
 class LitDatabase {
 public:

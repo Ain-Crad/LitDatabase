@@ -60,10 +60,8 @@ uint32_t LitDatabase::InternalNodeFindChild(void* node, uint32_t key) {
 
 Cursor* LitDatabase::InternalNodeFind(Table* table, uint32_t page_num, uint32_t key) {
     void* node = GetPage(table->pager, page_num);
-
     uint32_t child_index = InternalNodeFindChild(node, key);
     uint32_t child_num = *InternalNodeChild(node, child_index);
-
     void* child = GetPage(table->pager, child_num);
     switch (get_node_type(child)) {
         case NODE_LEAF: return LeafNodeFind(table, child_num, key);

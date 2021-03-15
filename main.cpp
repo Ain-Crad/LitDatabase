@@ -5,7 +5,7 @@
 #include "LitDatabase.h"
 
 int main(int argc, char* argv[]) {
-    freopen("in.txt", "r", stdin);
+    // freopen("in.txt", "r", stdin);
     if (argc < 2) {
         std::cout << "Must supply a database filename." << std::endl;
         exit(EXIT_FAILURE);

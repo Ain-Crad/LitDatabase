@@ -113,7 +113,6 @@ ExecuteResult LitDatabase::ExecuteInsert(Statement* statement, Table* table) {
 
 ExecuteResult LitDatabase::ExecuteSelect(Statement* statement, Table* table) {
     Cursor* cursor = TableStart(table);
-
     Row row;
     while (!(cursor->end_of_table)) {
         DeserializeRow(CursorValue(cursor), &row);
@@ -164,36 +163,71 @@ Table* LitDatabase::DbOpen(const char* filename) {
 }
 
 Pager* LitDatabase::PagerOpen() {
-    assert(file_name != nullptr);
-    std::fstream* fd = new std::fstream();
-    fd->open(file_name, std::fstream::in);
-    if (fd->fail()) {
-        std::cout << "Create new database file." << std::endl;
-        fd->close();
-        fd->clear();
+    // windows
+    // assert(file_name != nullptr);
+    // std::fstream* fd = new std::fstream();
+    // fd->open(file_name, std::fstream::in | std::fstream::binary);
+    // if (fd->fail()) {
+    //     std::cout << "Create new database file." << std::endl;
+    //     fd->close();
+    //     fd->clear();
 
-        fd->open(file_name, std::fstream::out);
-        fd->close();
-        fd->clear();
+    //     fd->open(file_name, std::fstream::out);
+    //     fd->close();
+    //     fd->clear();
 
-        fd->open(file_name, std::fstream::in);
-    } else {
-        std::cout << "Load database file." << std::endl;
+    //     fd->open(file_name, std::fstream::in);
+    // } else {
+    //     std::cout << "Load database file." << std::endl;
+    //     fd->seekg(0, std::fstream::end);
+    //     int file_length = fd->tellg();
+    //     std::cout << "file_length: " << file_length << std::endl;
+    // }
+
+    // fd->seekg(0, std::fstream::end);
+    // int file_length = fd->tellg();
+    // fd->close();
+    // fd->clear();
+
+    // Pager* pager = new Pager();
+    // pager->fd = fd;
+    // pager->file_length = file_length;
+    // pager->num_pages = file_length / PAGE_SIZE;
+    // if (file_length % PAGE_SIZE != 0) {
+    //     std::cout << "file_length: " << file_length << " PAGE_SIZE: " << PAGE_SIZE << std::endl;
+    //     std::cout << "Db file is not a whole number of pages. Corrupt file." << std::endl;
+    //     exit(EXIT_FAILURE);
+    // }
+
+    // return pager;
+
+    // linux
+    int file_descriptor = open(file_name, O_RDWR | O_CREAT, S_IWUSR | S_IRUSR);
+    if (file_descriptor == -1) {
+        printf("unable to open file\n");
+        exit(EXIT_FAILURE);
     }
 
-    fd->seekg(0, std::fstream::end);
-    int file_length = fd->tellg();
-    fd->close();
-    fd->clear();
+    off_t file_length = lseek(file_descriptor, 0, SEEK_END);
+    if (file_length == 0) {
+        std::cout << "Create new database file." << std::endl;
+    } else {
+        std::cout << "Load database file." << std::endl;
+        std::cout << "File size: " << file_length << std::endl;
+    }
 
     Pager* pager = new Pager();
-    pager->fd = fd;
+    pager->file_descriptor = file_descriptor;
     pager->file_length = file_length;
-    pager->num_pages = file_length / PAGE_SIZE;
+    pager->num_pages = (file_length / PAGE_SIZE);
+
     if (file_length % PAGE_SIZE != 0) {
-        std::cout << "file_length: " << file_length << " PAGE_SIZE: " << PAGE_SIZE << std::endl;
-        std::cout << "Db file is not a whole number of pages. Corrupt file." << std::endl;
+        printf("db file is not a whole number of pages\n");
         exit(EXIT_FAILURE);
+    }
+
+    for (uint32_t i = 0; i < TABLE_MAX_PAGES; ++i) {
+        pager->pages[i] = nullptr;
     }
 
     return pager;
@@ -214,13 +248,26 @@ void* LitDatabase::GetPage(Pager* pager, uint32_t page_num) {
         }
 
         if (page_num < num_pages) {
-            pager->fd->open(file_name, std::fstream::in);
-            pager->fd->seekg(page_num * PAGE_SIZE, std::fstream::beg);
-            pager->fd->read(static_cast<char*>(page), PAGE_SIZE);
+            // windows
+            // pager->fd->open(file_name, std::fstream::in);
+            // pager->fd->seekg(page_num * PAGE_SIZE, std::fstream::beg);
+            // pager->fd->read(static_cast<char*>(page), PAGE_SIZE);
+            // if (pager->fd->fail()) {
+            //     std::cout << "Read failed" << std::endl;
+            // }
 
-            pager->fd->close();
-            pager->fd->clear();
+            // pager->fd->close();
+            // pager->fd->clear();
+
+            // linux
+            lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
+            ssize_t bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
+            if (bytes_read == -1) {
+                printf("Error reading file\n");
+                exit(EXIT_FAILURE);
+            }
         }
+
         pager->pages[page_num] = page;
 
         if (page_num >= pager->num_pages) {
@@ -237,13 +284,19 @@ void LitDatabase::DbClose(Table* table) {
     for (uint32_t i = 0; i < pager->num_pages; ++i) {
         if (pager->pages[i] == nullptr) continue;
         PagerFlush(pager, i);
-        free(pager->pages[i]);
-        pager->pages[i] = nullptr;
     }
 
-    if (pager->fd->is_open()) pager->fd->close();
-    if (pager->fd->fail()) {
-        std::cout << "Error closing db file" << std::endl;
+    // windows
+    // if (pager->fd->is_open()) pager->fd->close();
+    // if (pager->fd->fail()) {
+    //     std::cout << "Error closing db file" << std::endl;
+    //     exit(EXIT_FAILURE);
+    // }
+
+    // linux
+    int result = close(pager->file_descriptor);
+    if (result == -1) {
+        printf("Error closing db file\n");
         exit(EXIT_FAILURE);
     }
 
@@ -251,38 +304,46 @@ void LitDatabase::DbClose(Table* table) {
 }
 
 void LitDatabase::PagerFlush(Pager* pager, uint32_t page_num) {
-    pager->fd->open(file_name, std::fstream::out);
+    // windows--bugs here!!!
+    // pager->fd->open(file_name, std::fstream::out | std::fstream::binary);
+    // if (pager->pages[page_num] == nullptr) {
+    //     std::cout << "Tried to flush null page." << std::endl;
+    //     exit(EXIT_FAILURE);
+    // }
+
+    // pager->fd->seekp(page_num * PAGE_SIZE, std::fstream::beg);
+    // if (pager->fd->fail()) {
+    //     std::cout << "Error seeking." << std::endl;
+    //     exit(EXIT_FAILURE);
+    // }
+
+    // pager->fd->write(static_cast<char*>(pager->pages[page_num]), PAGE_SIZE);
+    // if (pager->fd->fail()) {
+    //     std::cout << "Error writing." << std::endl;
+    //     exit(EXIT_FAILURE);
+    // }
+    // pager->fd->close();
+
+    // linux
     if (pager->pages[page_num] == nullptr) {
-        std::cout << "Tried to flush null page." << std::endl;
+        std::cout << "Tried to flush null page" << std::endl;
         exit(EXIT_FAILURE);
     }
 
-    pager->fd->seekp(page_num * PAGE_SIZE, std::fstream::beg);
-    if (pager->fd->fail()) {
-        std::cout << "Error seeking." << std::endl;
+    off_t offset = lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
+
+    if (offset == -1) {
+        printf("Error seeking\n");
         exit(EXIT_FAILURE);
     }
 
-    pager->fd->write(static_cast<char*>(pager->pages[page_num]), PAGE_SIZE);
-    if (pager->fd->fail()) {
-        std::cout << "Error writing." << std::endl;
+    ssize_t bytes_written = write(pager->file_descriptor, pager->pages[page_num], PAGE_SIZE);
+
+    if (bytes_written == -1) {
+        printf("Error writing\n");
         exit(EXIT_FAILURE);
     }
-    pager->fd->close();
 }
-
-// Cursor* LitDatabase::TableStart(Table* table) {
-//     Cursor* cursor = static_cast<Cursor*>(malloc(sizeof(Cursor)));
-//     cursor->table = table;
-//     cursor->page_num = table->root_page_num;
-//     cursor->cell_num = 0;
-
-//     void* root_node = GetPage(table->pager, table->root_page_num);
-//     uint32_t num_cells = *LeafNodeNumCells(root_node);
-//     cursor->end_of_table = (num_cells == 0);
-
-//     return cursor;
-// }
 
 Cursor* LitDatabase::TableStart(Table* table) {
     Cursor* cursor = TableFind(table, 0);
@@ -382,6 +443,7 @@ void LitDatabase::CreateNewRoot(Table* table, uint32_t right_child_page_num) {
 
     memcpy(left_child, root, PAGE_SIZE);
     set_node_root(left_child, false);
+
     InitializeInternalNode(root);
     set_node_root(root, true);
     *InternalNodeNumKeys(root) = 1;
